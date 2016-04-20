@@ -51,6 +51,10 @@ def get_settings(override = None):
                 print d[k]
     return d    
 
+
+
+
+
 #SECTION: -------------------DATA STRUCTURES--------------
 coefficient = collections.namedtuple('coefficient',['sub','r','c'])
 
@@ -85,6 +89,8 @@ def diag_concat(mats):
         col += mi.shape[1]
     return A
 
+#assumes csr
+#
 def diag_concat_sparse(mats):
     tot_rows=sum(map(lambda x: x.shape[0], mats))
     tot_cols=sum(map(lambda x: x.shape[1], mats))
@@ -124,6 +130,7 @@ def all_pairs(l):
         for li2 in range(li1+1, len(l)):
            pl.append([l[li1], l[li2]])
     return pl
+
 
 #solves a quadratic equation, returning both solutions
 def quad(a, b, c):
@@ -222,11 +229,21 @@ def orth_to_constraints_marked(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=N
                         coeff1 = coefficient(sub1, tf_to_inds[sub1][tf.name], gene_to_inds[sub1][g.name])
                         coeff2 = coefficient(sub2, tf_to_inds[sub2][tf_orth.name], gene_to_inds[sub2][g_orth.name])
                         
+
+                        
                         constr = constraint(coeff1, coeff2, lamS_pair)
+                        #print 'appending '+str(constr)
+                        #print (tf, g)
+                        #print (tf_orth, g_orth)
+                        #print (ortho_dict[tf]) 
+                        #print ( ortho_dict[g])
+                        #raw_input('')
                         constraints.append(constr)
                         marks.append(real)
     return (constraints, marks)
 
+
+#now just call orth_to_constraints_marked and throw away the marks. Lost the ability to specify lamS_opt, but we never did that. can add back in later
 def orth_to_constraints(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None):
     (con, marks) = orth_to_constraints_marked(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None)
     return con
@@ -234,6 +251,7 @@ def orth_to_constraints(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None):
 #enumerates fusion constraints from orthology
 #args as in solve_ortho_direct
 #returns list of constraints. individual constraints are pairs of coefficients, with an associated weight lamS
+#NOTE!!!! THIS IS FUCKED UP IF THEY HAVE OVERLAPPING GENE NAMES! FIX FIX FIX FIX FIX
 def orth_to_constraints_old(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None):
     #build some maps
     
@@ -258,6 +276,7 @@ def orth_to_constraints_old(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None
             for g_i in range(len(gene_ls[org_i])):
                 tf = one_gene(tf_ls[org_i][tf_i], organisms[org_i])
                 g = one_gene(gene_ls[org_i][g_i], organisms[org_i])
+                #print (tf, g)
                 
                 for tf_orth in ortho_dict[tf]:
                     for g_orth in ortho_dict[g]:
@@ -265,6 +284,7 @@ def orth_to_constraints_old(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None
                         sub2 = org_to_ind[tf_orth.organism]
                         sub3 = org_to_ind[g_orth.organism]
             
+                        #print (tf, g, tf_orth, g_orth)
                         if not sub2 == sub3:
                             continue
                         if not tf_orth.name in tf_to_inds[sub2]:
@@ -297,6 +317,7 @@ def orth_to_constraints_old(organisms, gene_ls, tf_ls, orth, lamS, lamS_opt=None
 #given priors, returns a list of constraints. constraints representing priors have their second coefficient equal to None.
 #NOTE: this function does not allow priors to have different weights.
 def priors_to_constraints(organisms, gene_ls, tf_ls, priors, lam):
+    
     
     org_to_ind = {organisms[x] : x for x in range(len(organisms))}
     gene_to_inds = map(lambda o: {gene_ls[o][x] : x for x in range(len(gene_ls[o]))}, range(len(organisms)))
@@ -332,6 +353,7 @@ def no_self_reg_constraints(organisms, gene_ls, tf_ls, lam):
 
 #SECTION: --------CODE FOR ADJUSTING CONSTRAINTS---------
 
+
 #for the given columns, figures out the inverse covariance matrix of the equivalent prior for fused/unfused, takes the trace of the inverses as the variance, and figures out a constant to multiply fused interactions by that will equalize them
 def adjust_var(Xs, cols, fuse_cons, ridge_cons, lamR):
 #returns the inverse covariance matrix of the prior equivalent to the given constraint structure
@@ -362,6 +384,7 @@ def adjust_var(Xs, cols, fuse_cons, ridge_cons, lamR):
             Einv[m, m] += fuse_con.lam
         return Einv
 
+
     Einv_fused = inv_cov(Xs, cols, fuse_cons, ridge_cons, lamR)
     Einv_unfused = inv_cov(Xs, cols, [], ridge_cons, lamR)
 
@@ -383,6 +406,93 @@ def adjust_var(Xs, cols, fuse_cons, ridge_cons, lamR):
         ridge_cons_adj.append(constraint(rcon.c1, rcon.c2, rcon.lam*c))
         
     return (fuse_cons_adj, ridge_cons_adj, lamR)
+
+#MISSING: adjuster based on variance, because that's not always possible
+
+#we don't want the presence of a fusion constraint to over-constrain the coefficients that the fusion constraint is attached to. This code adjusts the weight of fusion and ridge constraints in order to maintain the determinant of the covariance matrix.
+#because default constraints are not represented individually, this code involves introducing new ones sometimes.
+#NOTE: I think there are some numerical issues here but I don't remember what they are
+#NOTE: not using this right now
+def adjust_vol(Xs, cols, fuse_cons, ridge_cons, lamR):
+    if len(fuse_cons) == 0:    
+        return (fuse_cons, ridge_cons)
+        #we're building a canonical ordering over the columns for the current set of columns
+    counter = 0
+    b_to_n = dict()
+    n_to_b = dict()    
+    for co in cols:
+        sub = co.sub
+        for r in range(Xs[sub].shape[1]):
+            b_to_n[(sub, co.c, r)] = counter
+            n_to_b[counter] = (sub, co.c, r)
+            counter += 1
+    N = counter
+    Einv = np.zeros((N, N))
+    for n in range(N):
+        Einv[n, n] = lamR
+    for ridge_con in ridge_cons:
+        n = b_to_n[(ridge_con.c1.sub, ridge_con.c1.c, ridge_con.c1.r)]
+        Einv[n, n] = ridge_con.lam
+    Einv_noS = Einv.copy()
+    
+    adj_rows = set()
+    for fuse_con in fuse_cons:
+        n = b_to_n[(fuse_con.c1.sub, fuse_con.c1.c, fuse_con.c1.r)]
+        m = b_to_n[(fuse_con.c2.sub, fuse_con.c2.c, fuse_con.c2.r)]
+        Einv[n, m] += -fuse_con.lam
+        Einv[m, n] += -fuse_con.lam
+        Einv[n, n] += fuse_con.lam
+        Einv[m, m] += fuse_con.lam
+        adj_rows.add(m)
+        adj_rows.add(n)
+
+    Einv_noS = Einv_noS/lamR #we do this so that most values will be equal to 1 in the determinant computation
+    d2 = np.linalg.det(Einv_noS)   
+    Einv = Einv/lamR
+    d1 = np.linalg.det(Einv)
+
+    #think about left multiplying by an identity matrix with some constant c in entries that show up in adj_rows in order to equate determinants
+    c = (d2/d1)**(1.0/len(adj_rows))
+
+    #this is some code for testing
+    if np.isnan(c):
+        print Einv
+        #print [Einv[i][i] for i in range(len(matrix[0]))]
+        plt.plot(np.diag(Einv))
+        plt.show()
+        print(d1, d2, len(adj_rows), c)
+    fuse_adj = []
+    ridge_adj = []
+    for fuse_con in fuse_cons:
+        n = b_to_n[(fuse_con.c1.sub, fuse_con.c1.c, fuse_con.c1.r)]
+        m = b_to_n[(fuse_con.c2.sub, fuse_con.c2.c, fuse_con.c2.r)]
+        if n in adj_rows or m in adj_rows:
+            con = constraint(fuse_con.c1,fuse_con.c2,fuse_con.lam*c)            
+            fuse_adj.append(con)
+        else:
+            con = constraint(fuse_con.c1,fuse_con.c2,fuse_con.lam)
+            fuse_adj.append(con)
+    for ridge_con in ridge_cons:
+        n = b_to_n[(ridge_con.c1.sub, ridge_con.c1.c, ridge_con.c1.r)]
+        if n in adj_rows:
+            con = constraint(ridge_con.c1, ridge_con.c2, ridge_con.lam*c)
+            ridge_adj.append(con)
+        else:
+            con = constraint(ridge_con.c1, ridge_con.c2, ridge_con.lam)
+            ridge_adj.append(con)
+
+    #now introduce new constraints that were previously default
+    ridge_coeff_s = set(map(lambda x: x.c1, ridge_cons))
+    for n in adj_rows:
+        (sub, c, r) = n_to_b[n]
+        coeff = coefficient(sub, r, c)
+        if not coeff in ridge_coeff_s:
+            con = constraint(coeff, None, lamR*c)
+            ridge_adj.append(con)        
+        
+    return (fuse_adj, ridge_adj)
+
+
 
 #SECTION: ----------------CODE FOR SOLVING THE MODEL-------------------
 
@@ -410,6 +520,8 @@ def opt_lamR(Xs, Ys, folds, maxlamR, lamR_steps, it):
                     unit = len(tot_devs[j][lambdaRs[m]])
                     tot_devs[j][lambdaRs[m]].append((dev[m],unit))
 
+                #add to tot_dev the deviances for each lambda 
+                #enet_cv.plot_oof_devs()
 
     all_devs = []
     for i in range(len(Xs)):
@@ -423,6 +535,9 @@ def opt_lamR(Xs, Ys, folds, maxlamR, lamR_steps, it):
         print opt_ind
         optlamR.append(lambdaRs[opt_ind])
 
+        #sum_dev = sum(map(sum, tot_devs))
+        #opt_ind = int(np.where(sum_dev == sum_dev.min())[0])
+        #optlamR.append(lambdaRs[opt_ind])
 
     devs = map(lambda tot_dev: pd.DataFrame([[lamR, deviance, iteration] for lamR, devlist in tot_dev.items() for deviance, iteration in devlist], columns=['lamR', 'deviance','unit']), tot_devs)  
 
@@ -448,6 +563,7 @@ def iter_solve(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, settings):
     sol_changes = []
     scores = []
     #build a map from subproblem/column to constraint
+    #note: i think the constraint list generates A -> B and B -> A, but this won't work if that's wrong
     sc_to_con = collections.defaultdict(lambda: [])
     for con in fuse_constraints:
         sc_to_con[(con.c1.sub, con.c1.c)].append(con)
@@ -470,6 +586,8 @@ def iter_solve(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, settings):
             yp[i, 0] = (lam*lamsc)**0.5 * Bs[s][r,c]
         return yp
 
+    #first, build the penalty matrices and find the targets once
+    #don't do this after all!
     if False:
         P_targ_saved = []
         for s in range(len(Xs)):
@@ -488,6 +606,7 @@ def iter_solve(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, settings):
             #print 'here1'
             lamsc = lam_ramp[i]
             
+            
             for c in range(Y.shape[1]): #column of B we are solving
                 print 'iteration %d, lamS=%f, sub %d, col %d'%(i,lam_ramp[i],s,c),
                 print '\r',
@@ -504,10 +623,12 @@ def iter_solve(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, settings):
                 yI = np.zeros((I.shape[0], 1))
                 y = np.vstack((Y[:, [c]], yI, yp))
                                 
+                #SOMETHING WEIRD IS HAPPENING HERE
                 (b, resid, rank, sing) = np.linalg.lstsq(F, y)
                 #b=lstsq_dumb(F, y)
                 
                 cB[s][:, [c]] = b
+            #check for convergence: how much has the solution changed?
             sol_change = ((pB[s] - cB[s])**2).sum()
             sol_changes.append(sol_change)
         if iter_eval:
@@ -569,6 +690,8 @@ def direct_solve(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR):
     return Bs
 
 
+
+
 #reference solver, that does not involve breaking up constraints
 #gene_ls/tf_ls: lists of gene names and tf names for each problem
 #Xs: list of TF expression matrices
@@ -584,7 +707,7 @@ def solve_ortho_ref(organisms, gene_ls, tf_ls, Xs, Ys, orth, priors,lamP, lamR, 
     Bs = direct_solve(Xs, Ys, fuse_con, ridge_con, lamR, adjust = settings['adjust'])
     return Bs
 
-#most basic solver
+#most basic solver. Can involve a pre-adjustment step to avoid over-regularizing fused constraints. Solves by factoring.
 #gene_ls/tf_ls: lists of gene names and tf names for each problem
 #Xs: list of TF expression matrices
 #YS: list of gene expression matrices
@@ -637,6 +760,8 @@ def solve_ortho_iter(organisms, gene_ls, tf_ls, Xs, Ys, orth, priors,lamP, lamR,
     
     return Bs
 
+
+
 #parameters as solve_ortho_direct. 
 #s_it defines the number of scad-like iterations to do
 def solve_ortho_direct_scad(organisms, gene_ls, tf_ls, Xs, Ys, orth, priors, lamP, lamR, lamS, settings = None):
@@ -658,6 +783,7 @@ def solve_ortho_direct_scad_plot(out, organisms, gene_ls, tf_ls, Xs, Ys, orth, p
     Bs = solve_scad_plot(out, Xs, Ys, fuse_con, ridge_con, lamR, lamS, settings['s_it'], settings = settings)
     return Bs
 
+
 #parameters as solve_ortho_direct. 
 #m_it defines the number of mcp-like iterations to do
 def solve_ortho_direct_mcp(organisms, gene_ls, tf_ls, Xs, Ys, orth, priors, lamP, lamR, lamS, settings = None):
@@ -668,6 +794,37 @@ def solve_ortho_direct_mcp(organisms, gene_ls, tf_ls, Xs, Ys, orth, priors, lamP
     fuse_con = orth_to_constraints(organisms, gene_ls, tf_ls, orth, lamS)
     Bs = solve_mcp(Xs, Ys, fuse_con, ridge_con, lamR, lamS, settings['s_it'], settings = settings)
     return Bs
+
+
+#parameters as solve_ortho_direct. 
+#em_it defines the number of em iterations to do
+def solve_ortho_direct_em(organisms, gene_ls, tf_ls, Xs, Ys, orth, priors, lamP, lamR, lamS, settings = None):
+    if settings == None:
+        settings = get_settings()  
+    (lamR, lamP) = pad_lamRP(lamR, lamP, len(organisms))    
+    ridge_con = priors_to_constraints(organisms, gene_ls, tf_ls, priors, lamP)    
+    fuse_con = orth_to_constraints(organisms, gene_ls, tf_ls, orth, lamS)
+    Bs = solve_em(Xs, Ys, fuse_con, ridge_con, lamR, lamS, settings['s_it'], settings = settings)
+    return Bs
+
+#??? fix this later
+def solve_ortho_lasso(organisms, gene_ls, tf_ls, Xs, Ys, Xs_t, Ys_t, orth, priors,lamP, lamR, lamS, n_alpha=100, adjust=False, special_args=None):
+    (lamR, lamP) = pad_lamRP(lamR, lamP, len(organisms))    
+    ridge_con = priors_to_constraints(organisms, gene_ls, tf_ls, priors, lamP)
+    fuse_con = orth_to_constraints(organisms, gene_ls, tf_ls, orth, lamS)
+    #first, we find the max dot-product between a regressor and a column of y. This closely matches _alpha_grid code used in linear_models 
+    alpha_max = 0
+    for s, X in enumerate(Xs):
+        Xy = np.dot(X.T, Ys[s])
+        alpha_max = np.max((alpha_max, np.abs(Xy).max()))
+    eps = 0.001
+    alphas = np.logspace(np.log10(alpha_max*eps), np.log10(alpha_max), n_alpha)
+    
+    (_, errors) = lasso_path(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, Xs_t, Ys_t, alphas, return_model=False)
+    best_alpha_ind = np.argmin(errors)
+    alpha = alphas[best_alpha_ind]
+    (Bs, _) = lasso_path(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, Xs_t, Ys_t, alphas, return_model=False)
+
 
 #this is like direct solve, but it breaks up unrelated columns
 #solves W = argmin_W ((XW - Y)**2).sum() + constraint related terms
@@ -728,6 +885,7 @@ def get_Design(Xs, Ys, columns, cons_f, cons_r, lambdaRs):
     #what this means is that column c in subproblem s has start index cums[s] + r
     cums = [0]+list(np.cumsum(map(lambda x: x.shape[1], X_l)))
     
+    
     #I_vals = np.ones(cums[-1]) * lambdaR
     I_vals = np.ones(cums[-1])*R_l
         #now we go through the ridge constraints and set entries of I
@@ -754,6 +912,8 @@ def get_Design(Xs, Ys, columns, cons_f, cons_r, lambdaRs):
             
         P[P_r, pc1] = con.lam
         P[P_r, pc2] = -con.lam
+            
+        #due to an annoying bug in sparse vstack, I need to check if P is all zeros
         
     X = diag_concat_sparse(X_l)        
     
@@ -775,6 +935,73 @@ def get_Design(Xs, Ys, columns, cons_f, cons_r, lambdaRs):
         b_inds.append((start_ind, end_ind))
     
     return (F, y, b_inds)
+
+# solves lasso along the supplied path, and computes error on training set
+def lasso_path(Xs, Ys, fuse_constraints, ridge_constraints, lambdaR, Xs_t, Ys_t, alphas, return_model):
+    
+    (cols_l, cons_l, ridg_l) = factor_constraints_columns(Xs, Ys, fuse_constraints, ridge_constraints)
+    
+    Bs = []
+    alpha_err = np.array(alphas.shape)
+    #Initialize matrices to hold solutions
+    for i in range(len(Xs)):
+        Bs.append(np.zeros((Xs[i].shape[1], Ys[i].shape[1])))
+        
+    #iterate over subproblems
+    for f, cols in enumerate(cols_l):
+        (F, y, b_inds) = get_Design(Xs, Ys, cols_l[f], cons_l[f], ridg_l[f], lambdaR)
+
+        X = np.array(F.todense()) # waka waka
+        
+        y = np.squeeze(y)
+        (alphas, coefs, _) = linear_model.lasso_path(X, y, return_models=False,alphas=alphas)
+    
+        if return_model:
+            bsp = np.squeeze(coefs)
+        #bsp = scipy.sparse.linalg.lsqr(F, y)#the first result is b, and it needs to be turned into a column vector
+            b = bsp[:, None] #god this is annoying
+        
+            for co_i, co in enumerate(cols):
+                (start_ind, end_ind) = b_inds[co_i]
+                Bs[co.sub][:, [co.c]] = b[start_ind:end_ind]
+    
+    return (Bs, alpha_err)
+
+#I've deleted this, because I was fairly sure we would never use it. Can dig it out of git if needed.
+#def direct_solve_factor_r
+
+def solve_em(Xs, Ys, fuse_con, ridge_con, lamR, lamS, em_it, settings = None):
+    
+    verbose=settings['verbose']
+    if verbose:
+        from matplotlib import pyplot as plt
+        import seaborn as sns
+        #plt.figure()
+    f = settings['f']
+    uf = settings['uf']
+
+    Bs = direct_solve_factor(Xs, Ys, fuse_con, ridge_con, lamR)
+    marks = settings['marks']
+    if lamS == 0:
+        em_it = 1
+    for i in range(em_it-1):
+        if verbose and marks != None and lamS > 1:
+            lams = np.array(map(lambda con: con.lam, fuse_con))
+            #noise up a little bit
+            lams = lams + 0.01*np.random.randn(lams.shape[0])
+            
+            plt.subplot(int('%d%d%d' % (em_it-1, 1, i+1)))
+            
+            sns.kdeplot(lams[marks == True], shade=True, label='real')
+            sns.kdeplot(lams[marks == False], shade=True, label='fake')
+    
+
+        fuse_con = em(Bs, fuse_con, lamS, f, uf, marks=marks)
+        #fuse_con = em(Bs, fuse_con, lamS, 0.5, marks=marks)
+        Bs = direct_solve_factor(Xs, Ys, fuse_con, ridge_con, lamR)
+    if verbose:    
+        plt.show()#lock=False)
+    return Bs
 
 #computes unbiased weighted sample covariance.
 #assumes that samples are row? vectors
@@ -808,6 +1035,169 @@ def beta_diff_rand(Bs, k):
 def gaussian_density(u, s2, x):
     nrm = 1.0 / (2*np.pi*s2)**0.5
     return nrm * np.exp(-1 * (x-u)**2 / (2*s2))
+
+
+
+
+def em_old(Bs_init, fuse_cons, lamS, pct_fused, marks=None):
+    pct_fused = 0.9
+    beta_diffs = beta_diff(Bs_init, fuse_cons)
+    c_init = np.var(beta_diffs)
+
+    x = beta_diffs
+    w = np.array( (0, 0) )
+    u = np.array( (0, 0) )
+    c = np.array( (0.5*c_init, 2*c_init) )
+
+    h = np.zeros((2, len(beta_diffs)))
+
+    n_iter = 5
+    for i in range(n_iter):
+        for s in (0,1):
+            ps = gaussian_density(u[s], c[s], x)
+            h[s, :] = w[s] * ps
+        h = h / h.sum(axis=0)
+        
+    
+    return fuse_cons
+
+def em(Bs_init, fuse_cons, lamS, f, uf, marks=None):
+    verbose=True
+    if verbose:
+        from matplotlib import pyplot as plt
+        import seaborn as sns
+
+    if len(fuse_cons) == 0 or lamS == 0:
+        return fuse_cons
+    g = mixture.GMM(n_components = 2)
+    beta_diffs = beta_diff(Bs_init, fuse_cons)
+     
+    #disabling update of means seems to be broken
+    g.set_params(params='wc')
+    g.init_params = 'w'
+    #g.n_iter = 0
+    #g.fit(beta_diffs)
+    #g.n_iter = 10
+    g.means_ = np.array(((0, ), (0, ))) #vile hack
+
+    cv_init = np.cov(beta_diffs)
+    g.covars_ = cv_init*np.array(((0.5, ), (2.0, ))) #vile hack
+    
+    
+    #artificially symmetrize the data
+    g.fit(np.concatenate((beta_diffs, -1*beta_diffs))) 
+    #get indices for fused/unfused
+    cl_fu = int(g.covars_[1] > g.covars_[0])
+    cl_un = 1-cl_fu
+    scores = g.score_samples(beta_diffs)
+    #normalize weights    
+
+    scores_fu = scores[1][:, cl_fu]
+    scores_un = scores[1][:, cl_un]
+
+    covar_fu = g.covars_[cl_fu]
+    covar_un = g.covars_[cl_un]
+    
+    #go through the fusion constraints, and compute the expected value of covariance across class probabilities
+    new_cons = []
+    pens = 1.0/covar_fu * scores_fu + 1.0/covar_un * scores_un
+    scale = lamS / pens.mean()
+    pens = pens * scale
+    #now, make new fusion constraints
+    for i, con in enumerate(fuse_cons):
+        new_con = constraint(c1=con.c1, c2=con.c2, lam=pens[i])
+        new_cons.append(new_con)
+
+    if verbose:
+        print 'the class covariances are estimated as %f, %f' % (covar_fu, covar_un)
+        print 'the class means are estimated as %f, %f' % (g.means_[cl_fu], g.means_[cl_un])
+        print 'the weights are %f, %f' % (g.weights_[cl_fu], g.weights_[cl_un])
+        pred = g.predict(beta_diffs)        
+        
+        plt.close()
+        plt.subplot(221)
+        sns.kdeplot(beta_diffs, shade=True)
+        plt.xlabel('fused penalty difference')
+        
+        plt.subplot(222)
+        if (pred == cl_fu).sum():
+            sns.kdeplot(beta_diffs[pred == cl_fu], shade=True)
+        if (pred == cl_un).sum():
+            sns.kdeplot(beta_diffs[pred == cl_un], shade=True)
+        plt.xlabel('fused penalty difference')
+        plt.subplot(223)
+        
+        sns.kdeplot(pens[marks == True], shade=True, label='real')
+        sns.kdeplot(pens[marks == False], shade=True, label='fake')
+        plt.xlabel('lambda')
+        #plt.plot(beta_diffs, pens,'o')
+        
+
+        plt.subplot(224)
+        sns.kdeplot(beta_diffs[marks == True], shade=True, label='real')
+        sns.kdeplot(beta_diffs[marks == False], shade=True, label='fake')
+        plt.xlabel('fused penalty difference')
+        plt.legend()
+
+
+        plt.show()
+        plt.show(block=False)
+    return new_cons
+    
+def em_old(Bs_init, fuse_con, lamS, f, uf):
+    if not len(fuse_con):
+        print 'no fusion constraints, skipping em adjustment'
+        return fuse_con
+    g = mixture.GMM(n_components=2) #n_iter=10)
+    thetas_uf = []
+    for i in range(len(fuse_con)):
+        r1 = Bs_init[0].shape[0]
+        c1 = Bs_init[0].shape[1]
+        b_init_1 = Bs_init[0][random.randrange(0,r1,1)][random.randrange(0,c1,1)]
+        r2 = Bs_init[1].shape[0]
+        c2 = Bs_init[1].shape[1]
+        b_init_2 = Bs_init[1][random.randrange(0,r2,1)][random.randrange(0,c2,1)]
+        thetas_uf.append(b_init_1 - b_init_2)
+
+    thetas_f = []
+    for i in range(len(fuse_con)):
+        con = fuse_con[i]
+        b_init_1 = Bs_init[con.c1.sub][con.c1.r, con.c1.c]
+        b_init_2 = Bs_init[con.c2.sub][con.c2.r, con.c2.c]
+        thetas_f.append(b_init_1 - b_init_2)
+    print len(thetas_f)
+    print len(thetas_uf)
+    thetas = np.array(thetas_f + thetas_uf)
+    g.fit(thetas_f+thetas_uf)
+
+    constants = []
+    m1 = np.round(g.means_, 2)[0]
+    m2 = np.round(g.means_, 2)[1]
+    v1 = np.round(g.covars_, 2)[0]
+    v2 = np.round(g.covars_, 2)[1]
+    if abs(v1) >= abs(v2):
+        constants = [uf,f]
+    else:
+        constants = [f, uf]
+
+    new_fuse_constraints = []
+
+    for i in range(len(fuse_con)):
+        con = fuse_con[i]
+        b_init_1 = Bs_init[con.c1.sub][con.c1.r, con.c1.c]
+        b_init_2 = Bs_init[con.c2.sub][con.c2.r, con.c2.c]
+        theta_init = np.abs(b_init_1 - b_init_2)
+        gauss = g.predict([theta_init])[0]
+        prob1 = g.predict_proba([theta_init])[0][0]
+        prob2 = g.predict_proba([theta_init])[0][1]
+        comp1 = constants[gauss]*prob1*(1/g.covars_[gauss][0])
+        comp2 = constants[abs(1-gauss)]*prob2*(1/g.covars_[abs(1-gauss)][0])
+        newlamS = comp1 + comp2
+        new_con = constraint(con.c1, con.c2, newlamS)
+        #hacky
+        new_fuse_constraints.append(new_con)
+
+    return new_fuse_constraints
 
 
 def solve_mcp(Xs, Ys, fuse_con, ridge_con, lamR, lamS, m_it, settings):  
@@ -937,8 +1327,11 @@ def scad_prime(theta, lamS, a):
     
 def scad2_prime(theta, lamS, a):
 
+#    if theta < a/2:
     if theta < a:
         return theta * lamS
+#    if theta >= a/2:
+#        return lamS * max(0, (a - theta))
     if theta >= a:
         return lamS * max(0, (2*a - theta))
 
@@ -966,6 +1359,32 @@ def scad(Bs_init, fuse_constraints, lamS, a):
             newlams.append(nlamS)
         new_con = constraint(con.c1, con.c2, nlamS)
         new_fuse_constraints.append(new_con)
+    #plt.scatter(deltabeta, newlams)
+    #plt.title('scad')
+    #plt.xlabel('deltabeta')
+    #plt.ylabel('newlams')
+    #plt.show()
+
+    #db = []
+    #ss = []
+    #for i in range(len(new_fuse_constraints)):
+    #    con = new_fuse_constraints[i]
+    #    b_init_1 = Bs_init[con.c1.sub][con.c1.r, con.c1.c]
+    #    b_init_2 = Bs_init[con.c2.sub][con.c2.r, con.c2.c] 
+    #    db.append(b_init_1 - b_init_2)
+    #    ss.append(con.lam)
+    #plt.scatter(db, ss)
+    #plt.title('scad2')
+    #plt.show()       
+
+    #plt.hist(db)
+    #plt.title('deltabetas - scad')
+    #plt.show()
+
+    #plt.hist(ss)
+    #plt.title('lamss - scad')
+    #plt.show()
+
     return new_fuse_constraints
 
 def pick_a(Bs_init, fuse_constraints, perc):
@@ -1008,8 +1427,15 @@ def factor_constraints_columns(Xs, Ys, constraints, ridge):
         col_adj[column(sub = con.c1.sub, c=con.c1.c)].append(column(sub = con.c2.sub, c=con.c2.c))
         col_adj[column(sub = con.c2.sub, c=con.c2.c)].append(column(sub = con.c1.sub, c=con.c1.c))
 
+    #constraints_c = set()
+    #for con in constraints:
+    #    constraints_c.add(constraint(coefficient(con.c1.sub, None, con.c1.c), coefficient(con.c2.sub, None, con.c2.c), None))
+    #    constraints_c.add(constraint( coefficient(con.c2.sub, None, con.c2.c), coefficient(con.c1.sub, None, con.c1.c), None))
+    #start with a set of all unvisited columns
     not_visited = set(columns)
     
+    #this function recursively enumerates all of the columns linked col
+    #for speed reasons, i'll start with an empty list and append to it
     def enumerate_linked_columns(start_col):
         linked_cols = []
         

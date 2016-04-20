@@ -51,6 +51,7 @@ def get_aupr_evaluator(Xs_te, Ys_te, genes, tfs, priors, tr_priors, exclude_tfs=
         return aupr_acc
     return inner
 
+#hey! what does this do?
 def get_rank(scores, labels, coords):
     score_array = np.array(scores)
     label_array = np.array(labels)
@@ -178,6 +179,7 @@ def fit_model(data_fn, lamP, lamR, lamS, solver='solve_ortho_direct', settings =
     (e1_tr, t1_tr, genes1, tfs1) = ds1.load_data()
     (e2_tr, t2_tr, genes2, tfs2) = ds2.load_data()
 
+        # jam things together
     Xs = [t1_tr, t2_tr]
     Ys = [e1_tr, e2_tr]
     
@@ -192,7 +194,7 @@ def fit_model(data_fn, lamP, lamR, lamS, solver='solve_ortho_direct', settings =
     if solver == 'solve_ortho_ref':
         Bs = fl.solve_ortho_ref(organisms, genes, tfs, Xs, Ys, orth, priors, lamP, lamR, lamS, settings = settings)
     if solver == 'iter_solve':
-
+        #solve solution paths then return the last value
         Bs = fl.solve_ortho_iter(organisms, genes, tfs, Xs, Ys, orth, priors, lamP, lamR, lamS, settings = settings)
         
     return Bs
@@ -249,8 +251,10 @@ def cv_unfused(data_fn, lamP, lamR, k, solver='solve_ortho_direct', settings=Non
     folds = map((lambda x: x.partition_data(k)), dss)
     all_priors = map((lambda x: x.get_priors()[0]), dss)
 
+    #helper to return all but ith entry of list x    
     excl = lambda x,i: x[0:i]+x[(i+1):] 
     
+    #helper function for dividing priors
     def r_partition(x, t):
         inds = np.arange(len(x))
         random.shuffle(inds)
@@ -279,6 +283,7 @@ def cv_unfused(data_fn, lamP, lamR, k, solver='solve_ortho_direct', settings=Non
     Ys_te = [None]*num_species
     Bs = [None]*num_species
 
+        #downsamples the ROC, or PRC, curve
     def downsample_roc(roc):
         if roc[0] == None:
             return roc
@@ -290,6 +295,7 @@ def cv_unfused(data_fn, lamP, lamR, k, solver='solve_ortho_direct', settings=Non
     for fold in range(k):
         if verbose:
             print 'working on %d'  % fold
+        #get conditions for current cross-validation fold
         for si in range(num_species):
             if cv_both[si] and k > 1:
                 f_te[si] = folds[si][fold]
@@ -312,6 +318,7 @@ def cv_unfused(data_fn, lamP, lamR, k, solver='solve_ortho_direct', settings=Non
 
         priors_tr_fl = reduce(lambda x,y: x+y, priors_tr)
 
+        #solve the model
         for si in range(num_species):
             if solver == 'solve_ortho_direct':
                 B = fl.solve_ortho_direct(organisms, genes, tfs, Xs, Ys, orth, priors_tr_fl, lamP, lamR, lamS, lamS_opt, settings = settings)[si]
@@ -450,6 +457,8 @@ def cv_model_m(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',setting
 
     else:
         print 'test_all must be all, part or gold'
+    #print (len(priors_tr[0]), len(priors_tr[1]))
+    #print (len(priors_te[0]), len(priors_te[1]))
     
     f_te = [None]*num_species
     f_tr = [None]*num_species
@@ -496,6 +505,7 @@ def cv_model_m(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',setting
         
         priors_tr_fl = reduce(lambda x,y: x+y, priors_tr)
 
+        #solve the model
         if solver == 'solve_ortho_direct':
             Bs = fl.solve_ortho_direct(organisms, genes, tfs, Xs, Ys, orth, priors_tr_fl, lamP, lamR, lamS, lamS_opt, settings = settings)
         if solver == 'solve_ortho_direct_scad':
@@ -509,19 +519,25 @@ def cv_model_m(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',setting
         if solver == 'iter_solve':
         #solve solution paths then return the last value
             if settings['iter_eval']:
+                #iter_eval = get_R2_evaluator(Xs_te, Ys_te)
+                #iter_eval = get_mse_evaluator(Xs_te, Ys_te)
                 iter_eval = get_aupr_evaluator(Xs_te, Ys_te, genes, tfs, priors_te, priors_tr)
                 settings['iter_eval'] = iter_eval
                 Bs = fl.solve_ortho_iter(organisms, genes, tfs, Xs, Ys, orth, priors_tr_fl, lamP, lamR, lamS, settings = settings)
             
+         #evaluate a bunch of metrics
         (corr, fused_coeffs) = fused_coeff_corr(organisms, genes, tfs, orth, Bs)
             
         for si in range(num_species):
             print si
+            #correlation of fused coefficients
             err_dicts[si]['corr'][fold,0] = corr
 
+            #mse
             mse = prediction_error(Xs_te[si], Bs[si], Ys_te[si], 'mse', exclude_tfs=exclude_tfs)
             err_dicts[si]['mse'][fold, 0] = mse
 
+            #R2
             R2 = prediction_error(Xs_te[si], Bs[si], Ys_te[si], 'R2', exclude_tfs=exclude_tfs)
             err_dicts[si]['R2'][fold, 0] = R2
             
@@ -578,6 +594,51 @@ def cv_model_m(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',setting
     return err_dicts
 
 
+#runs the basic model with specified parameters under k-fold cross-validation, and stores a number of metrics
+#k: the number of cv folds
+#reverse: train on the little dude (reverse train and test)
+#cv_both: if false, always use all the data for the corresponding species
+#exclude_tfs: don't evaluate on transcription factors. this is useful for generated data, where you can't hope to get them right
+def cv_model1(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',special_args=None, reverse=False, cv_both=(True,True), exclude_tfs=True, eval_con=False):
+    print 'DEPRACATED cv_model1'
+
+
+#runs the basic model with specified parameters under k-fold cross-validation, and stores a number of metrics
+#returns array for plotting in seaborn
+#k: the number of cv folds
+#reverse: train on the little dude (reverse train and test)
+#cv_both: if false, always use all the data for the corresponding species
+#exclude_tfs: don't evaluate on transcription factors. this is useful for generated data, where you can't hope to get them right
+def cv_model2(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',special_args=None, reverse=False, cv_both=(True,True), exclude_tfs=True):
+    print 'DEPRACATED cv_model2'
+    
+
+
+#runs the basic model with specified parameters under k-fold cross-validation
+#stores a bunch of metrics, applied to each CV-fold
+#k: the number of cv folds
+#reverse: train on the little dude (reverse train and test)
+#cv_both: if false, always use all the data for the corresponding species
+#exclude_tfs: don't evaluate on transcription factors. this is useful for generated data, where you can't hope to get them right
+#doesn't output any files
+def cv_model3(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',special_args=None, reverse=False, cv_both=(True,True), exclude_tfs=True):
+    print 'DEPRACATED cv_model3'
+
+
+#cv_model3, but with pct_priors
+def cv_model4(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',special_args=None, reverse=False, cv_both=(True,True), exclude_tfs=True, pct_priors=0):
+    print 'DEPRACATED cv_model4'
+
+#cv_model1, but with percent_priors
+#runs the basic model with specified parameters under k-fold cross-validation, and stores a number of metrics
+#percent_priors is the percent of priors to use. these priors are removed from the test set
+#k: the number of cv folds
+#reverse: train on the little dude (reverse train and test)
+#cv_both: if false, always use all the data for the corresponding species
+#exclude_tfs: don't evaluate on transcription factors. this is useful for generated data, where you can't hope to get them right
+def cv_model5(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct',special_args=None, reverse=False, cv_both=(True,True), exclude_tfs=True, eval_con=False, pct_priors=0):
+    print 'DEPRACATED cv_model5'
+
 #SECTION: -------------------------CODE FOR EVALUATING THE OUTPUT
 
 def mse_B(Bpred, net_fn, exclude_tfs = True):
@@ -616,6 +677,10 @@ def prediction_error(X, B, Y, metric, exclude_tfs = True):
             r2 = 1 - ((y-yp)**2).sum()/ ((y-y.mean())**2).sum()
             r2a += r2
             
+#            if c == start_ind:
+#                plt.plot(y)
+#                plt.plot(yp)
+#                plt.show()
         return r2a/(Ypred.shape[1]-start_ind)
     if metric == 'mse':
         msea = 0.0
@@ -725,7 +790,10 @@ def get_scores_labels(net, genes, tfs, priors, tr_priors=[], exclude_tfs = False
             
             scores.append(score)#scores[i] = score
             labels.append(label)#labels[i] = label
-            coords.append(coord) 
+            coords.append(coord)
+            #print 'wat'
+            #print score
+            #print label
     return (scores, labels, coords)
 
 #evaluates the area under the precision recall curve, with respect to some given priors
@@ -746,6 +814,7 @@ def eval_network_pr(net, genes, tfs, priors, tr_priors=[], exclude_tfs = False, 
         aupr = auc(recall, precision)
         return (aupr, (recall, precision, t))
     else:
+        
         aupr = np.nan
     
         return (aupr, (None, None, None))
@@ -846,6 +915,7 @@ def grid_search_params(data_fn, lamP, lamR, lamS, k, solver='solve_ortho_direct'
     if eval_metric == 'auroc':
         return (best_auroc, best_lamP, best_lamR, best_lamS, grid)
 
+
 #given list of roc/prc curves of the form [(precision, recall, t), ...] produces a new set of curves interpolated at every unique value of recall/fpr present on the list all_roc_curves
 
 def pool_roc(roc_curves, all_roc_curves = None, max_x = np.inf):
@@ -869,6 +939,10 @@ def pool_roc(roc_curves, all_roc_curves = None, max_x = np.inf):
     for i, roc in enumerate(roc_curves):
         
         (fs, hs, ts) = roc
+        #from matplotlib import pyplot as plt
+        
+        #for interp to work, the function must be increasing
+        # if it isn't, reverse it, then reverse again
         if fs[0] < fs[-1]:            
             ts_interp[i, :] = np.interp(fs_interp, fs, ts)
             hs_interp[i, :] = np.interp(fs_interp, fs, hs)
