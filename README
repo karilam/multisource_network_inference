@@ -1,0 +1,27 @@
+TOP LEVEL: 
+
+    fused_reg.py: this file contains core code for fitting fused linear models for gene regulatory networks. Things that are here are
+    -code for solving grn
+	-any data structures needed to solve grn
+	-code for generating/manipulating constraints from data
+		
+    data_sources.py: this file is a list of classes implementing a data_source interface. Also contains code for generating synthetic data, which should be saved to files and then dealt with as data in a standard format. data_sources does the following
+    -return organism names
+	-return (ordered) gene names for each organism
+	-return (ordered) tf names for each organism
+	-return expression matrices for each organism
+	-return tf expression matrices for each organism
+	-return orthology lists
+	-return priors
+	
+    fit_grn.py: this file contains
+    -code for fitting various grn models given data sources
+	-code for manipulating data
+	-code for evaluating network performance
+	-code for cross-validation
+	-code for parameter-estimation
+
+
+    examples.py: this file contains two examples for running fused regression, one with synthetic data and one using the bacterial dataset
+	     
+     
