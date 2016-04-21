@@ -349,7 +349,7 @@ def cv_unfused(data_fn, lamP, lamR, k, solver='solve_ortho_direct', settings=Non
             Ss.append(S)
 
         (rc_S, tfs_u, genes_u) = rank_combine2(Ss, tfs, genes)
-                  
+                   
         (aupr, prc) = eval_network_pr(rc_S, genes_u, tfs_u, priorstest, tr_priors=priorstr, exclude_tfs=exclude_tfs, constraints = None, test_all=test_all)
 
         err_dict['aupr'][fold,0] = aupr
@@ -746,8 +746,10 @@ def get_scores_labels(net, genes, tfs, priors, tr_priors=[], exclude_tfs = False
     #we only evaluate on interactions when the gene/tf is mentioned in a prior
     for prior in priors:
         
-        gene_marked[gene_to_ind[prior[0].name]] = True
-        gene_marked[gene_to_ind[prior[1].name]] = True
+        if prior[0].name in gene_to_ind:
+            gene_marked[gene_to_ind[prior[0].name]] = True
+        if prior[1].name in gene_to_ind:
+            gene_marked[gene_to_ind[prior[1].name]] = True
         if prior[0].name in tf_to_ind:
             tf_marked[tf_to_ind[prior[0].name]] = True
         if prior[1].name in tf_to_ind:
